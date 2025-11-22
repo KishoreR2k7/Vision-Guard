@@ -292,3 +292,4 @@ MIT License - See LICENSE file for details
 ## 📧 Support
 
 For issues and questions, open a GitHub issue or contact the development team.
+# Vision-Guard
