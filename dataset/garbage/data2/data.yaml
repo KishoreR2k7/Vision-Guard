@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['garbage']
+
+roboflow:
+  workspace: universidad-carlos-iii-de-madrid-i1yfs
+  project: 5-final-garbage-detection
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/universidad-carlos-iii-de-madrid-i1yfs/5-final-garbage-detection/dataset/1

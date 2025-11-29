@@ -1,3 +1,4 @@
+
 import cv2
 import numpy as np
 import onnxruntime as ort
@@ -9,13 +10,17 @@ import io
 import sys
 import os
 from pathlib import Path
+import argparse
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
 from storage.minio_client import upload_frame, create_bucket_if_not_exists
 
-# COCO class names (YOLOv8 uses COCO dataset with 80 classes)
+# Violence Detection class names (custom trained model)
+VIOLENCE_CLASSES = ['NonViolence', 'Violence']
+
+# COCO class names (YOLOv8 uses COCO dataset with 80 classes) - For fallback
 COCO_CLASSES = [
     'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat',
     'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat',
@@ -29,7 +34,12 @@ COCO_CLASSES = [
     'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
 ]
 
-# Map COCO classes to incident types (for demo purposes)
+# Map violence classes to incident types
+VIOLENCE_TO_INCIDENT = {
+    1: "violence_detected",  # Violence class
+}
+
+# Map COCO classes to incident types (for demo purposes - fallback)
 COCO_TO_INCIDENT = {
     0: "person_detected",  # person - will trigger incident
     2: "traffic_congestion",  # car
@@ -42,11 +52,30 @@ COCO_TO_INCIDENT = {
 
 # Load YOLOv11-Nano model
 class YOLOv11Nano:
-    def __init__(self, model_path, input_size=(640, 640), confidence_threshold=0.5):
+    def __init__(self, model_path, input_size=(640, 640), confidence_threshold=0.5, model_type='coco'):
+        """
+        Initialize YOLO model
+        Args:
+            model_path: Path to ONNX model file
+            input_size: Input image size (width, height)
+            confidence_threshold: Confidence threshold for detections
+            model_type: 'violence' for custom violence model, 'coco' for standard COCO model
+        """
         self.session = ort.InferenceSession(model_path, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.input_name = self.session.get_inputs()[0].name
         self.input_size = input_size
         self.confidence_threshold = confidence_threshold
+        self.model_type = model_type
+        
+        # Set class names and incident mapping based on model type
+        if model_type == 'violence':
+            self.classes = VIOLENCE_CLASSES
+            self.class_to_incident = VIOLENCE_TO_INCIDENT
+            print("✅ Loaded Violence Detection Model")
+        else:
+            self.classes = COCO_CLASSES
+            self.class_to_incident = COCO_TO_INCIDENT
+            print("✅ Loaded COCO Detection Model")
 
     def preprocess(self, frame):
         resized = cv2.resize(frame, self.input_size)
@@ -178,12 +207,15 @@ def process_stream(stream_url, model):
             
             class_id = det['class_id']
             confidence = det['confidence']
-            class_name = COCO_CLASSES[class_id] if class_id < len(COCO_CLASSES) else f"class_{class_id}"
+            class_name = model.classes[class_id] if class_id < len(model.classes) else f"class_{class_id}"
+            
+            # Choose color based on class (red for violence, green for others)
+            color = (0, 0, 255) if (model.model_type == 'violence' and class_id == 1) else (0, 255, 0)
             
             # Draw rectangle and label
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             label = f"{class_name}: {confidence:.2f}"
-            cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         # Add info overlay
         cv2.putText(frame, f"Detections: {len(detections)}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
@@ -195,9 +227,9 @@ def process_stream(stream_url, model):
                 class_id = detection['class_id']
                 
                 # Only process if it's in our incident mapping
-                if class_id in COCO_TO_INCIDENT:
-                    incident_type = COCO_TO_INCIDENT[class_id]
-                    class_name = COCO_CLASSES[class_id] if class_id < len(COCO_CLASSES) else f"class_{class_id}"
+                if class_id in model.class_to_incident:
+                    incident_type = model.class_to_incident[class_id]
+                    class_name = model.classes[class_id] if class_id < len(model.classes) else f"class_{class_id}"
                     confidence = detection['confidence']
                     
                     print(f"\n🚨 INCIDENT DETECTED: {class_name} -> {incident_type} (confidence: {confidence:.2f})")
@@ -246,8 +278,40 @@ def process_stream(stream_url, model):
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="YOLOv11 Violence Detection Pipeline")
+    parser.add_argument('--weights', type=str, default=None, help='Path to ONNX model file')
+    parser.add_argument('--source', type=str, default=None, help='Path to video file or stream URL')
+    args = parser.parse_args()
+
+    # Determine model path
+    if args.weights:
+        model_path = args.weights
+        model_type = 'violence' if 'violence' in os.path.basename(model_path).lower() else 'coco'
+    else:
+        violence_model_path = Path("./training/violence_detection/yolo11n_violence_optimized/weights/best.onnx")
+        if violence_model_path.exists():
+            model_path = str(violence_model_path)
+            model_type = 'violence'
+        else:
+            model_path = settings.yolo_model_path
+            model_type = 'coco'
+
+    if model_type == 'violence':
+        print("🎯 Using Violence Detection Model")
+    else:
+        print("⚠️ Violence model not found, using default COCO model")
+        print(f"   Train violence model first or check path: {model_path}")
+
     model = YOLOv11Nano(
-        model_path=settings.yolo_model_path,
-        confidence_threshold=settings.confidence_threshold
+        model_path=model_path,
+        confidence_threshold=settings.confidence_threshold,
+        model_type=model_type
     )
-    process_stream(settings.stream_url, model)
+
+    # Determine video source
+    if args.source:
+        stream_url = args.source
+    else:
+        stream_url = settings.stream_url
+
+    process_stream(stream_url, model)

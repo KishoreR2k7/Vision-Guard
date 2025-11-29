@@ -1,0 +1,8 @@
+names:
+- NonViolence
+- Violence
+nc: 2
+path: C:\Users\kishore\Documents\Vision-Guard-Ai\training\..\dataset_prepared
+test: images/test
+train: images/train
+val: images/val

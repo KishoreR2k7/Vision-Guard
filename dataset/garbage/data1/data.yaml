@@ -1,0 +1,7 @@
+names:
+- garbage
+nc: 1
+path: C:\Users\kishore\Documents\Vision-Guard-Ai\dataset\garbage\data1
+test: test/images
+train: train/images
+val: valid/images

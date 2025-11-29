@@ -1,0 +1,7 @@
+names:
+- Accident
+nc: 1
+path: C:\Users\kishore\Documents\Vision-Guard-Ai\dataset\accident_detetcion\data1
+test: test/Accident
+train: train/Accident
+val: val/Accident
